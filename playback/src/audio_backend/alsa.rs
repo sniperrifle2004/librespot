@@ -122,15 +122,19 @@ impl Sink for AlsaSink {
     }
 
     fn stop(&mut self) -> io::Result<()> {
-        let r = (|| {
-            let r = self.write_buffer_to_pcm();
-            self.buffer.clear();
-            r?;
-            let pcm = self.pcm.as_ref().ok_or_else(|| {io::Error::new(io::ErrorKind::Other, "stop with no pcm")})?;
-            pcm.drain().or_else(|err| io::Result::Err(io::Error::new(io::ErrorKind::Other, err)))
-        })();
-        self.pcm = None;
-        r
+        if self.pcm.is_some() {
+            let r = (|| {
+                let r = self.write_buffer_to_pcm();
+                self.buffer.clear();
+                r?;
+                let pcm = self.pcm.as_ref().ok_or_else(|| {io::Error::new(io::ErrorKind::Other, "stop with no pcm")})?;
+                pcm.drain().or_else(|err| io::Result::Err(io::Error::new(io::ErrorKind::Other, err)))
+            })();
+            self.pcm = None;
+            r
+        } else {
+            Ok(())
+        }
     }
 
     fn write(&mut self, data: &[i16]) -> io::Result<()> {
