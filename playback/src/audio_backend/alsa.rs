@@ -85,6 +85,19 @@ impl Open for AlsaSink {
     }
 }
 
+impl AlsaSink {
+    fn write_buffer_to_pcm(&mut self) -> io::Result<()> {
+        let pcm = self.pcm.as_mut().ok_or_else(|| {io::Error::new(io::ErrorKind::Other, "write with no pcm")})?;
+        let io = pcm.io_i16().or_else(|err| io::Result::Err(io::Error::new(io::ErrorKind::Other, err)))?;
+        match io.writei(&self.buffer) {
+            Ok(_) => Ok(()),
+            Err(err) => {
+                pcm.try_recover(err, false).or_else(|err| io::Result::Err(io::Error::new(io::ErrorKind::Other, err)))
+            },
+        }
+    }
+}
+
 impl Sink for AlsaSink {
     fn start(&mut self) -> io::Result<()> {
         if self.pcm.is_none() {
@@ -109,19 +122,15 @@ impl Sink for AlsaSink {
     }
 
     fn stop(&mut self) -> io::Result<()> {
-        {
-            let pcm = self.pcm.as_mut().unwrap();
-            // Write any leftover data in the period buffer
-            // before draining the actual buffer
-            let io = pcm.io_i16().unwrap();
-            match io.writei(&self.buffer[..]) {
-                Ok(_) => (),
-                Err(err) => pcm.try_recover(err, false).unwrap(),
-            }
-            pcm.drain().unwrap();
-        }
+        let r = (|| {
+            let r = self.write_buffer_to_pcm();
+            self.buffer.clear();
+            r?;
+            let pcm = self.pcm.as_ref().ok_or_else(|| {io::Error::new(io::ErrorKind::Other, "stop with no pcm")})?;
+            pcm.drain().or_else(|err| io::Result::Err(io::Error::new(io::ErrorKind::Other, err)))
+        })();
         self.pcm = None;
-        Ok(())
+        r
     }
 
     fn write(&mut self, data: &[i16]) -> io::Result<()> {
@@ -135,13 +144,9 @@ impl Sink for AlsaSink {
                 .extend_from_slice(&data[processed_data..processed_data + data_to_buffer]);
             processed_data += data_to_buffer;
             if self.buffer.len() == self.buffer.capacity() {
-                let pcm = self.pcm.as_mut().unwrap();
-                let io = pcm.io_i16().unwrap();
-                match io.writei(&self.buffer) {
-                    Ok(_) => (),
-                    Err(err) => pcm.try_recover(err, false).unwrap(),
-                }
+                let r = self.write_buffer_to_pcm();
                 self.buffer.clear();
+                r?
             }
         }
 
